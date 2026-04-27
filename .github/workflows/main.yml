@@ -63,60 +63,52 @@ jobs:
           git add sci-hub.ir_${{ steps.get_filename.outputs.original_name }}.7z.*
           echo "Added archive chunks to staging."
 
-      - name: Commit and Push chunks (up to 10 per batch)
+       # ... (مراحل قبلی مثل دانلود و استخراج)
+
+      - name: Commit and Push chunks
         run: |
-          # استفاده از Git commands برای مدیریت batch ها
-          chunks=("sci-hub.ir_${steps.get_filename.outputs.original_name}.7z".*)
-          total=${#chunks[@]}
-          batch_size=10
-          start=0
+          # افزودن تمام فایل‌های آرشیو به Git
+          git add sci-hub.ir_${{ steps.get_filename.outputs.original_name }}.7z.*
+          echo "Added all archive chunks to staging."
 
-          if [ $total -eq 0 ]; then
-            echo "No archive chunks found to push."
-            exit 0
-          fi
+          # بررسی کنید آیا تغییری برای کامیت وجود دارد
+          if ! git diff --staged --quiet; then
+            # کامیت کردن تمام تغییرات یکباره
+            git commit -m "Add all archive chunks for ${{ steps.get_filename.outputs.original_name }}"
+            echo "Committed all archive chunks."
 
-          echo "Total chunks to push: $total"
-
-          while [ $start -lt $total ]; do
-            end=$((start + batch_size - 1))
-            [ $end -ge $total ] && end=$((total - 1))
-
-            echo "Processing chunks $start to $end (out of $total)..."
-
-            # Commit کردن تکه‌های این بسته
-            commit_message="Add chunks $((start+1))-$((end+1)) of $total"
-            git commit -m "$commit_message"
-
-            # Push کردن با تلاش مجدد
+            # Push کردن تمام تغییرات با تلاش مجدد
             push_success=false
-            for attempt in {1..9}; do
-              echo "Attempt $attempt to push..."
-              if git push origin HEAD --force-with-lease; then # استفاده از HEAD و force-with-lease برای اطمینان از عدم تداخل
+            # ما اینجا تعداد تلاش‌ها رو بیشتر می‌کنیم چون یک push بزرگ داریم
+            for attempt in {1..15}; do
+              echo "Attempt $attempt to push all changes..."
+              # سعی می‌کنیم بدون force push کنیم. اگر موفق نشد، بعداً force-with-lease رو امتحان می‌کنیم
+              if git push origin HEAD; then
                 echo "Push successful."
                 push_success=true
                 break
               else
-                echo "Push failed on attempt $attempt. Retrying in 10 seconds..."
-                sleep 10
-                # ممکن است لازم باشد قبل از تلاش مجدد، git pull یا rebase انجام شود، ولی برای workflow های ساده معمولا لازم نیست
+                echo "Push failed on attempt $attempt. Retrying in 20 seconds..."
+                sleep 20
+                # سعی می‌کنیم قبل از تلاش مجدد، ریپو رو آپدیت کنیم
+                # ولی چون ما فقط اضافه کردیم و کسی دیگه کامیت نکرده، این ممکنه لازم نباشه
+                # اگر لازم بود: git fetch origin && git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
               fi
             done
 
             if [ "$push_success" = false ]; then
-              echo "Failed to push chunks after multiple attempts. Aborting."
-              exit 1 # پایان دادن به workflow با خطا
+              echo "Failed to push all chunks after multiple attempts. Attempting force push..."
+              # اگر push معمولی ناموفق بود، از force-with-lease استفاده می‌کنیم
+              # این باید با احتیاط استفاده شود، اما برای workflow که فقط اضافه می‌کند، معمولاً امن است
+              if git push origin HEAD --force-with-lease; then
+                echo "Force push successful."
+                push_success=true
+              else
+                echo "Force push also failed. Aborting."
+                exit 1 # پایان دادن به workflow با خطا
+              fi
             fi
-
-            # اگر آخرین بسته بود، حلقه تمام شده
-            if [ $end -eq $((total - 1)) ]; then
-              break
-            fi
-
-            # رفتن به بسته بعدی
-            start=$((end + 1))
-            echo "Waiting 5 seconds before next batch..."
-            sleep 5
-          done
-
-     
+          else
+            echo "No changes to commit or push."
+          fi
+  
